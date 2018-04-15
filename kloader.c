@@ -22,8 +22,6 @@
  * Requires: kernel patch for tfp0
  * Supports: armv7 iOS 4.0 - 9.3.5
  *           arm64 iOS 7.0 - 8.4.1
- *
- * xcrun -sdk iphoneos clang kloader.c -arch armv7 -arch arm64 -framework IOKit -framework CoreFoundation -Wall -miphoneos-version-min=4.0 -o kloader && ldid -Stfp0.plist kloader
  */
 
 #include <stdio.h>
@@ -334,6 +332,8 @@ int main(int argc, char *argv[]) {
   uintptr_t gPhysBase = 0xdeadbeef;
   uintptr_t load_address = 0xdeadbeef;
   switch (get_cpid()) {
+
+#ifndef __arm64__
     case 0x8920:
     case 0x8922:
       gPhysBase = 0x40000000;
@@ -358,7 +358,9 @@ int main(int argc, char *argv[]) {
       gPhysBase = 0x80000000;
       load_address = 0xbf000000;
       break;
+#endif
 
+#ifdef __arm64__
     case 0x8960:
       gPhysBase = 0x800800000;
       load_address = 0x83d100000;
@@ -373,11 +375,12 @@ int main(int argc, char *argv[]) {
       gPhysBase = 0x800e00000;
       load_address = 0x85eb00000;
       break;
+#endif
 
     default:
       printf("ERROR: Failed to recognize the chip.\n");
       exit(1);
-    }
+  }
 
   /* Sync disks */
   for (int i = 0; i < 10; i++)
