@@ -46,6 +46,7 @@ extern kern_return_t IOPMSleepSystem(mach_port_t);
 #define IMAGE_OFFSET 0x2000
 #define MACHO_HEADER_MAGIC MH_MAGIC_64
 #define KERNEL_SEARCH_ADDRESS 0xffffff8000000000
+#define KERNEL_BASE_STATIC 0xfffffff007004000
 
 static uint32_t arm64_branch_instruction(uintptr_t from, uintptr_t to) {
   return from > to ? 0x18000000 - (from - to) / 4 : 0x14000000 + (to - from) / 4;
@@ -54,6 +55,7 @@ static uint32_t arm64_branch_instruction(uintptr_t from, uintptr_t to) {
 #define IMAGE_OFFSET 0x1000
 #define MACHO_HEADER_MAGIC MH_MAGIC
 #define KERNEL_SEARCH_ADDRESS 0x81200000
+#define KERNEL_BASE_STATIC 0x0
 #endif
 
 /* Buggy, but re-implemented because some old versions of iOS don't have memmem */
@@ -177,20 +179,52 @@ static int get_cpid() {
 }
 
 static task_t get_kernel_task() {
-  task_t kernel_task;
+  task_t kernel_task = MACH_PORT_NULL;
   if (KERN_SUCCESS == task_for_pid(mach_task_self(), 0, &kernel_task))
     return kernel_task;
+  
+  // Add support for jailbreaks with hsp4
+  if (KERN_SUCCESS == host_get_special_port(mach_host_self(), HOST_LOCAL_NODE, 4, &kernel_task))
+    return kernel_task
 
   printf("ERROR: task_for_pid 0 failed.\n");
   exit(1);
 }
 
+static bool is_kaddr(uintptr_t addr)
+{
+    return (addr & 0xffffffff00000000) == 0xfffffff000000000;
+}
+
 static vm_address_t get_kernel_base(task_t kernel_task) {
+  
+ 
+  uintptr_t addr = 0;
   vm_region_submap_info_data_64_t info;
   vm_size_t size;
   mach_msg_type_number_t info_count = VM_REGION_SUBMAP_INFO_COUNT_64;
   unsigned int depth = 0;
-  uintptr_t addr = KERNEL_SEARCH_ADDRESS;
+  
+   // First try getting the slide with the hsp4 implementation
+  if(KERNEL_BASE_STATIC){
+    addr = KERNEL_BASE_STATIC;
+    struct task_dyld_info dyld_info = { 0 };
+    mach_msg_type_number_t count = TASK_DYLD_INFO_COUNT;
+    if(task_info(tfp0, TASK_DYLD_INFO, (task_info_t)&dyld_info, &count) == KERN_SUCCESS) { // Get the kerneltask info for hsp4 kblob implementation. See uncdecimus by @pwn20wnd
+      if (is_kaddr(KERNEL_BASE_STATIC + dyld_info.all_image_info_size)) {
+           addr+=dyld_info.all_image_info_size; // unc0ver stores the slide in the info_size
+           return addr;
+      }
+      else
+       {
+            printf("Kernel base or slide are weird. Base = %#llx, slide = %#llx\n", dyld_info.all_image_info_addr, dyld_info.all_image_info_size);
+            printf("Kernel blob at: %#llx\n", dyld_info.all_image_info_addr);
+       }
+    }
+  }
+  
+  
+  addr = KERNEL_SEARCH_ADDRESS;
 
   while (1) {
     if (KERN_SUCCESS != vm_region_recurse_64(kernel_task, (vm_address_t *)&addr, &size, &depth, (vm_region_info_t) &info, &info_count))
